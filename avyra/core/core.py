@@ -19,3 +19,6 @@ class AVYRACore:
     def handle(self, text: str) -> AVYRAResponse:
         request = self.nlp.process(text)
         return self.router.route(request)
+
+    def shutdown(self) -> None:
+        self.intelligence.shutdown()

@@ -1,15 +1,16 @@
-import subprocess
-from pathlib import Path
+import json
+import urllib.request
 from typing import Any
 
 from avyra.core.intelligence.provider import (
     IntelligenceProvider,
     IntelligenceResult,
 )
+from avyra.core.intelligence.runtime_manager import RuntimeManager
 
 
 class LocalIntelligence(IntelligenceProvider):
-    """AVYRA's local model-backed intelligence runtime."""
+    """AVYRA's persistent local intelligence provider."""
 
     SYSTEM_PROMPT = """
 You are AVYRA — Adaptive Voice, Yielding Reasoning & Automation.
@@ -18,21 +19,22 @@ You are a female personal AI assistant.
 The user is your boss and owner.
 
 Be natural, intelligent, concise, and friendly.
-You can communicate in English, Tamil, Malayalam,
-Tanglish, Manglish, and mixed-language conversation.
+
+Understand and respond naturally to:
+- English
+- Tamil
+- Malayalam
+- Tanglish
+- Manglish
+- mixed-language conversation
 
 Never expose private internal reasoning.
-Respond with the final useful answer only.
+Return only the final useful response.
 """.strip()
 
     def __init__(self) -> None:
-        self.runtime_path = Path(
-            r"C:\Users\MahilanJP\AppData\Local\Microsoft\WinGet\Packages"
-            r"\ggml.llamacpp_Microsoft.Winget.Source_8wekyb3d8bbwe"
-            r"\llama-cli.exe"
-        )
-
-        self.model = "Qwen/Qwen3-4B-GGUF:Q4_K_M"
+        self.runtime = RuntimeManager()
+        self.runtime.start()
 
     def generate(
         self,
@@ -40,57 +42,54 @@ Respond with the final useful answer only.
         context: dict[str, Any] | None = None,
     ) -> IntelligenceResult:
 
-        if not self.runtime_path.exists():
-            raise RuntimeError(
-                f"AVYRA local runtime not found: {self.runtime_path}"
-            )
+        payload = {
+            "model": "avyra-local",
+            "messages": [
+                {
+                    "role": "system",
+                    "content": self.SYSTEM_PROMPT,
+                },
+                {
+                    "role": "user",
+                    "content": prompt,
+                },
+            ],
+            "temperature": 0.7,
+            "max_tokens": 256,
+        }
 
-        full_prompt = (
-            f"{self.SYSTEM_PROMPT}\n\n"
-            f"Boss: {prompt}\n"
-            f"AVYRA:"
+        request = urllib.request.Request(
+            f"{self.runtime.base_url}/v1/chat/completions",
+            data=json.dumps(payload).encode("utf-8"),
+            headers={
+                "Content-Type": "application/json",
+            },
+            method="POST",
         )
 
-        command = [
-            str(self.runtime_path),
-            "-hf",
-            self.model,
-            "-p",
-            full_prompt,
-            "-n",
-            "256",
-            "--single-turn",
-            "--reasoning",
-            "off",
-            "--no-display-prompt",
-        ]
-
         try:
-            process = subprocess.run(
-                command,
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                timeout=180,
-            )
-        except subprocess.TimeoutExpired as exc:
+            with urllib.request.urlopen(
+                request,
+                timeout=120,
+            ) as response:
+                result = json.loads(
+                    response.read().decode("utf-8")
+                )
+        except Exception as exc:
             raise RuntimeError(
-                "AVYRA local intelligence timed out."
+                f"AVYRA intelligence request failed: {exc}"
             ) from exc
 
-        if process.returncode != 0:
-            raise RuntimeError(
-                f"AVYRA local intelligence failed:\n{process.stderr}"
-            )
-
-        output = process.stdout.strip()
+        text = result["choices"][0]["message"]["content"].strip()
 
         return IntelligenceResult(
-            text=output,
+            text=text,
             metadata={
                 "engine": "avyra-local",
-                "model": self.model,
+                "model": "Qwen3-4B-Q4_K_M",
                 "status": "ready",
             },
         )
+
+    def shutdown(self) -> None:
+        self.runtime.stop()
