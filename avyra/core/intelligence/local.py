@@ -2,6 +2,7 @@ import json
 import urllib.request
 from typing import Any
 
+from avyra.core.intelligence.conversation import ConversationContext
 from avyra.core.intelligence.provider import (
     IntelligenceProvider,
     IntelligenceResult,
@@ -35,6 +36,7 @@ Return only the final useful response.
     def __init__(self) -> None:
         self.runtime = RuntimeManager()
         self.runtime.start()
+        self.conversation = ConversationContext(max_messages=12)
 
     def generate(
         self,
@@ -42,18 +44,20 @@ Return only the final useful response.
         context: dict[str, Any] | None = None,
     ) -> IntelligenceResult:
 
+        # Add the boss's message to temporary conversation memory.
+        self.conversation.add_user(prompt)
+
+        messages = [
+            {
+                "role": "system",
+                "content": self.SYSTEM_PROMPT,
+            },
+            *self.conversation.as_api_messages(),
+        ]
+
         payload = {
             "model": "avyra-local",
-            "messages": [
-                {
-                    "role": "system",
-                    "content": self.SYSTEM_PROMPT,
-                },
-                {
-                    "role": "user",
-                    "content": prompt,
-                },
-            ],
+            "messages": messages,
             "temperature": 0.7,
             "max_tokens": 256,
         }
@@ -82,6 +86,9 @@ Return only the final useful response.
 
         text = result["choices"][0]["message"]["content"].strip()
 
+        # Remember AVYRA's response for the rest of this session.
+        self.conversation.add_assistant(text)
+
         return IntelligenceResult(
             text=text,
             metadata={
@@ -91,5 +98,10 @@ Return only the final useful response.
             },
         )
 
+    def clear_conversation(self) -> None:
+        """Clear AVYRA's temporary conversation memory."""
+        self.conversation.clear()
+
     def shutdown(self) -> None:
+        """Stop AVYRA's local intelligence runtime."""
         self.runtime.stop()
